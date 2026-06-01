@@ -1,11 +1,12 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { useFrameStore, useAppConfig, useFilterStore } from '../stores'
+import { useFrameStore, useAppConfig, useFilterStore, useSessionStore } from '../stores'
 import { AppConfig, FrameConfig, PhotoSlot, PrinterDevice } from '@shared/types'
 import { v4 as uuidv4 } from 'uuid'
 import { apiHelper } from '../lib/apiHelper'
 import { getSessionHistory, SessionHistoryItem } from '../lib/supabase'
+import { ConfirmBackHomeModal } from '../components/ConfirmBackHomeModal'
 import styles from './AdminDashboard.module.css'
 
 type DragMode = 'move' | 'resize-se' | 'resize-sw' | 'resize-ne' | 'resize-nw' | 'rotate' | null
@@ -15,6 +16,7 @@ function AdminDashboard(): JSX.Element {
     const { frames, addFrame, updateFrame, deleteFrame, addSlot, updateSlot, deleteSlot, setActiveFrame, undo, redo } = useFrameStore()
     const { config, updateConfig } = useAppConfig()
     const { filters, addFilter, removeFilter } = useFilterStore()
+    const { endSession } = useSessionStore()
 
     const [activeTab, setActiveTab] = useState<'frames' | 'timers' | 'filters' | 'payment' | 'history' | 'sharing' | 'printers' | 'queue'>('frames')
     const [cloudQueue, setCloudQueue] = useState<any[]>([])
@@ -36,6 +38,7 @@ function AdminDashboard(): JSX.Element {
     const [availablePrinters, setAvailablePrinters] = useState<PrinterDevice[]>([])
     const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([])
     const [isLoadingDevices, setIsLoadingDevices] = useState(false)
+    const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false)
 
     const canvasRef = useRef<HTMLDivElement>(null)
 
@@ -433,7 +436,7 @@ function AdminDashboard(): JSX.Element {
         >
             {/* Header */}
             <header className={styles.header}>
-                <button className={styles.backButton} onClick={() => navigate('/')}>
+                <button className={styles.backButton} onClick={() => setIsConfirmModalOpen(true)}>
                     ← Back
                 </button>
                 <h1>Admin Dashboard</h1>
@@ -1641,6 +1644,15 @@ function AdminDashboard(): JSX.Element {
                      </div>
                  )}
             </main >
+
+            <ConfirmBackHomeModal
+                isOpen={isConfirmModalOpen}
+                onClose={() => setIsConfirmModalOpen(false)}
+                onConfirm={() => {
+                    endSession()
+                    navigate('/')
+                }}
+            />
         </motion.div >
     )
 }

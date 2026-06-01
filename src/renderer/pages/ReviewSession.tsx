@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useSessionStore, useFrameStore } from '../stores'
+import { ConfirmBackHomeModal } from '../components/ConfirmBackHomeModal'
 import styles from './ReviewSession.module.css'
 
 type FilterType = 'none' | 'grayscale' | 'sepia' | 'warm' | 'cool' | 'vintage'
@@ -24,7 +25,8 @@ const ReviewSession: React.FC = () => {
         swapPhotos, 
         removePhoto,
         selectedFilter,
-        setSessionFilter
+        setSessionFilter,
+        endSession
     } = useSessionStore()
     const { frames } = useFrameStore()
     
@@ -32,6 +34,7 @@ const ReviewSession: React.FC = () => {
     const [aspectRatios, setAspectRatios] = useState<Record<string, number>>({})
     const [isPreviewMode, setIsPreviewMode] = useState(false)
     const [previewIndex, setPreviewIndex] = useState(0)
+    const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false)
     const containerRef = useRef<HTMLDivElement>(null)
 
     useEffect(() => {
@@ -191,6 +194,26 @@ const ReviewSession: React.FC = () => {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
         >
+            <motion.button
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                onClick={() => setIsConfirmModalOpen(true)}
+                title="Back to Home"
+                style={{
+                    position: 'fixed',
+                    top: '20px',
+                    left: '20px',
+                    padding: '6px 12px',
+                    backgroundColor: '#f8f9fa',
+                    border: '1px solid #dee2e6',
+                    borderRadius: '5px',
+                    cursor: 'pointer',
+                    fontSize: '10px',
+                    zIndex: 100
+                }}
+            >
+                ← Kembali
+            </motion.button>
             {!isPreviewMode ? (
                 <div className={styles.mainLayout}>
                     {/* Main Workspace - Takes most of the space */}
@@ -388,6 +411,15 @@ const ReviewSession: React.FC = () => {
                     </div>
                 </div>
             )}
+
+            <ConfirmBackHomeModal
+                isOpen={isConfirmModalOpen}
+                onClose={() => setIsConfirmModalOpen(false)}
+                onConfirm={() => {
+                    endSession()
+                    navigate('/')
+                }}
+            />
         </motion.div>
     )
 }

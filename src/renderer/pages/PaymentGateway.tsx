@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import QRCode from 'react-qr-code'
 import { useFrameStore, useAppConfig, useSessionStore } from '../stores'
 import { SessionTimer } from '../components/SessionTimer'
+import { ConfirmBackHomeModal } from '../components/ConfirmBackHomeModal'
 import styles from './PaymentGateway.module.css'
 
 interface PaymentState {
@@ -28,6 +29,7 @@ function PaymentGateway(): JSX.Element {
     })
     const [isCreatingOrder, setIsCreatingOrder] = useState(false)
     const [pollInterval, setPollInterval] = useState<ReturnType<typeof setInterval> | null>(null)
+    const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false)
 
     // Calculate total price
     const totalPrice = config.sessionPrice + (additionalPrints * config.additionalPrintPrice)
@@ -163,6 +165,16 @@ function PaymentGateway(): JSX.Element {
     const handleBack = (): void => {
         if (pollInterval) clearInterval(pollInterval)
         navigate('/frames')
+    }
+
+    const handleBackHome = (): void => {
+        if (pollInterval) clearInterval(pollInterval)
+        setIsConfirmModalOpen(true)
+    }
+
+    const handleConfirmBackHome = (): void => {
+        endSession()
+        navigate('/')
     }
 
     // Handle skip (for testing)
@@ -320,8 +332,15 @@ function PaymentGateway(): JSX.Element {
                         [DEV] Skip Payment
                     </button>
                 )}
-            </div>
-        </motion.div>
+
+                </div>
+
+                <ConfirmBackHomeModal
+                    isOpen={isConfirmModalOpen}
+                    onClose={() => setIsConfirmModalOpen(false)}
+                    onConfirm={handleConfirmBackHome}
+                />
+            </motion.div>
     )
 }
 

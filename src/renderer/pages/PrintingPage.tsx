@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
+import { motion } from 'framer-motion'
 import { useSessionStore, useAppConfig } from '../stores'
+import { ConfirmBackHomeModal } from '../components/ConfirmBackHomeModal'
 import styles from './PrintingPage.module.css'
 // Note: You must place 'printing_animation.mov' (or .mp4) in the src/renderer/assets folder 
 // or update this path to the correct asset later.
@@ -15,6 +17,7 @@ function PrintingPage(): JSX.Element {
     
     const [error, setError] = useState<string | null>(null)
     const [printCompleted, setPrintCompleted] = useState(false)
+    const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false)
     const hasStartedPrinting = useRef(false)
 
     // Get print quantity from navigation state, default to 2
@@ -147,8 +150,22 @@ function PrintingPage(): JSX.Element {
         }
     }
 
+    const handleBackHome = () => {
+        setIsConfirmModalOpen(true)
+    }
+
+    const handleConfirmBackHome = () => {
+        endSession()
+        navigate('/')
+    }
+
     return (
         <div className={styles.container}>
+            <ConfirmBackHomeModal
+                isOpen={isConfirmModalOpen}
+                onClose={() => setIsConfirmModalOpen(false)}
+                onConfirm={handleConfirmBackHome}
+            />
             {/* 
                 We use an HTML5 video tag. 
                 autoPlay, loop, muted ensures it plays automatically in the background 

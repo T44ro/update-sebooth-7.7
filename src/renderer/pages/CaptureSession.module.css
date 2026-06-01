@@ -58,7 +58,7 @@
     left: 0;
     width: 100%;
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-end;
     align-items: center;
     padding: var(--spacing-lg) var(--spacing-2xl);
     background: transparent;
@@ -89,6 +89,24 @@
     display: flex;
     align-items: center;
     gap: var(--spacing-sm);
+}
+
+.photoInfo {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: var(--spacing-xs);
+}
+
+.frameNumber {
+    font-size: var(--font-size-sm);
+    font-weight: 700;
+    color: #1A1A2E;
+    background: rgba(255, 255, 255, 0.9);
+    padding: var(--spacing-xs) var(--spacing-md);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--clay-shadow-sm);
+    border: 2px solid var(--clay-yellow);
 }
 
 /* Viewfinder */

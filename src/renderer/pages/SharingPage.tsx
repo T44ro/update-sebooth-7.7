@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import QRCode from 'react-qr-code'
 import { useSessionStore, useAppConfig } from '../stores'
 import { PrintQuantityModal } from '../components/PrintQuantityModal'
+import { ConfirmBackHomeModal } from '../components/ConfirmBackHomeModal'
 import styles from './SharingPage.module.css'
 
 function SharingPage(): JSX.Element {
@@ -15,6 +16,7 @@ function SharingPage(): JSX.Element {
     const [isGenerating, setIsGenerating] = useState(true)
     const [error, setError] = useState<string | null>(null)
     const [isPrintModalOpen, setIsPrintModalOpen] = useState(false)
+    const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false)
 
     useEffect(() => {
         if (!currentSession) {
@@ -93,6 +95,11 @@ function SharingPage(): JSX.Element {
         navigate('/printing', { state: { printQuantity: quantity } })
     }
 
+    const handleConfirmBackHome = () => {
+        endSession()
+        navigate('/')
+    }
+
     const handleHome = () => {
         endSession()
         navigate('/')
@@ -163,6 +170,12 @@ function SharingPage(): JSX.Element {
                 >
                     <img src="./assets/icons/icon-printer.png" alt="Print" className={styles.btnIcon} />
                     Print Photos
+
+            <ConfirmBackHomeModal
+                isOpen={isConfirmModalOpen}
+                onClose={() => setIsConfirmModalOpen(false)}
+                onConfirm={handleConfirmBackHome}
+            />
                 </motion.button>
             </div>
 

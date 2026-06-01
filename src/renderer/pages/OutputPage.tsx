@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useFrameStore, useSessionStore, useFilterStore, useAppConfig } from '../stores'
 import { PhotoSlot } from '@shared/types'
+import { ConfirmBackHomeModal } from '../components/ConfirmBackHomeModal'
 import styles from './OutputPage.module.css'
 import { supabase } from '../lib/supabase'
 import Lottie from 'lottie-react'
@@ -32,6 +33,7 @@ function OutputPage(): JSX.Element {
     const [isProcessing, setIsProcessing] = useState(true)
     const [isUploading, setIsUploading] = useState(false)
     const [uploadStatus, setUploadStatus] = useState<string>('')
+    const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false)
     const autoOpenRef = useRef(false)
     const { setCloudSessionId } = useSessionStore()
 
@@ -593,6 +595,26 @@ function OutputPage(): JSX.Element {
 
     return (
         <div className={styles.container}>
+            <motion.button
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                onClick={() => setIsConfirmModalOpen(true)}
+                title="Back to Home"
+                style={{
+                    position: 'fixed',
+                    top: '20px',
+                    left: '20px',
+                    padding: '5px 10px',
+                    backgroundColor: '#f8f9fa',
+                    border: '1px solid #dee2e6',
+                    borderRadius: '3px',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                    zIndex: 100
+                }}
+            >
+                ← Kembali
+            </motion.button>
             {error && <div className={styles.errorMessage}>{error}</div>}
 
             <canvas ref={canvasRef} style={{ display: 'none' }} />
@@ -676,6 +698,14 @@ function OutputPage(): JSX.Element {
                 )}
             </AnimatePresence>
 
+            <ConfirmBackHomeModal
+                isOpen={isConfirmModalOpen}
+                onClose={() => setIsConfirmModalOpen(false)}
+                onConfirm={() => {
+                    endSession()
+                    navigate('/')
+                }}
+            />
         </div>
     )
 }

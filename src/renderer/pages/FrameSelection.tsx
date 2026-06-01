@@ -1,8 +1,9 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { useFrameStore, useAppConfig, useSessionStore } from '../stores'
 import { SessionTimer } from '../components/SessionTimer'
+import { ConfirmBackHomeModal } from '../components/ConfirmBackHomeModal'
 import styles from './FrameSelection.module.css'
 
 function FrameSelection(): JSX.Element {
@@ -10,6 +11,7 @@ function FrameSelection(): JSX.Element {
     const { frames, setActiveFrame } = useFrameStore()
     const { config } = useAppConfig()
     const { endSession } = useSessionStore()
+    const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false)
 
     // Clear any existing session when entering frame selection
     // This prevents old photos from persisting after timer timeout
@@ -33,6 +35,11 @@ function FrameSelection(): JSX.Element {
     }
 
     const handleBack = (): void => {
+        setIsConfirmModalOpen(true)
+    }
+
+    const handleConfirmBack = (): void => {
+        endSession()
         navigate('/')
     }
 
@@ -147,6 +154,12 @@ function FrameSelection(): JSX.Element {
                     </div>
                 )}
             </main>
+
+            <ConfirmBackHomeModal
+                isOpen={isConfirmModalOpen}
+                onClose={() => setIsConfirmModalOpen(false)}
+                onConfirm={handleConfirmBack}
+            />
         </motion.div>
     )
 }

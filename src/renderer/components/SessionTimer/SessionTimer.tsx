@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import styles from './SessionTimer.module.css'
 
@@ -12,6 +12,12 @@ interface SessionTimerProps {
 export function SessionTimer({ duration, onTimeout, enabled, label = 'Session' }: SessionTimerProps): JSX.Element | null {
     const [timeLeft, setTimeLeft] = useState(duration)
     const [isWarning, setIsWarning] = useState(false)
+    const onTimeoutRef = useRef(onTimeout)
+
+    // Update ref when onTimeout changes
+    useEffect(() => {
+        onTimeoutRef.current = onTimeout
+    }, [onTimeout])
 
     // Reset timer when duration changes
     useEffect(() => {
@@ -26,7 +32,7 @@ export function SessionTimer({ duration, onTimeout, enabled, label = 'Session' }
             setTimeLeft(prev => {
                 if (prev <= 1) {
                     clearInterval(interval)
-                    onTimeout()
+                    onTimeoutRef.current()
                     return 0
                 }
                 return prev - 1
@@ -34,7 +40,7 @@ export function SessionTimer({ duration, onTimeout, enabled, label = 'Session' }
         }, 1000)
 
         return () => clearInterval(interval)
-    }, [enabled, onTimeout])
+    }, [enabled])
 
     // Warning when < 10 seconds
     useEffect(() => {

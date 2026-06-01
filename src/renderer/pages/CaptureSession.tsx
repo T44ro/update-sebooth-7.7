@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useFrameStore, useSessionStore, useAppConfig, useCameraStore } from '../stores'
 import { SessionTimer } from '../components/SessionTimer'
+import { ConfirmBackHomeModal } from '../components/ConfirmBackHomeModal'
 import styles from './CaptureSession.module.css'
 
 type CaptureState = 'idle' | 'countdown' | 'capturing' | 'preview' | 'reviewPopup'
@@ -35,7 +36,7 @@ function CaptureSession(): JSX.Element {
     const navigate = useNavigate()
     const { frames, activeFrame } = useFrameStore()
     const { config } = useAppConfig()
-    const { photos, addPhoto, startSession, currentSession } = useSessionStore()
+    const { photos, addPhoto, startSession, currentSession, endSession } = useSessionStore()
     const { isConnected } = useCameraStore()
 
     const [captureState, setCaptureState] = useState<CaptureState>('idle')
@@ -46,6 +47,7 @@ function CaptureSession(): JSX.Element {
     const [cameraError, setCameraError] = useState<string | null>(null)
     const [isGalleryExpanded, setIsGalleryExpanded] = useState(false)
     const [reviewPhotoIndex, setReviewPhotoIndex] = useState(0)
+    const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false)
 
     const videoRef = useRef<HTMLVideoElement>(null)
     const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -505,17 +507,40 @@ function CaptureSession(): JSX.Element {
                 label="Capture Session"
             />
 
+            <motion.button
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                onClick={() => setIsConfirmModalOpen(true)}
+                title="Back to Home"
+                style={{
+                    position: 'fixed',
+                    top: '20px',
+                    left: '20px',
+                    padding: '6px 12px',
+                    backgroundColor: '#f8f9fa',
+                    border: '1px solid #dee2e6',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    zIndex: 100
+                }}
+            >
+                ← Kembali
+            </motion.button>
+
             {/* Main Capture Area */}
             <div className={styles.captureArea}>
                 {/* Controls Bar - No back button to prevent timer circumvention */}
                 <div className={styles.controlsBar}>
-                    <h2 className={styles.frameName}>{currentFrame.name}</h2>
                     <div className={styles.controlsRight}>
-                        <span className={styles.photoCount}>
-                            {photos.length < captureSlots.length
-                                ? `Photo ${photos.length + 1} of ${captureSlots.length}`
-                                : `${photos.length} of ${captureSlots.length} ✓`}
-                        </span>
+                        <div className={styles.photoInfo}>
+                            <span className={styles.photoCount}>
+                                {photos.length < captureSlots.length
+                                    ? `Photo ${photos.length + 1} of ${captureSlots.length}`
+                                    : `${photos.length} of ${captureSlots.length} ✓`}
+                            </span>
+                            <span className={styles.frameNumber}>{currentFrame.name}</span>
+                        </div>
                     </div>
                 </div>
 
@@ -832,6 +857,15 @@ function CaptureSession(): JSX.Element {
                     )}
                 </AnimatePresence>
             </div>
+
+            <ConfirmBackHomeModal
+                isOpen={isConfirmModalOpen}
+                onClose={() => setIsConfirmModalOpen(false)}
+                onConfirm={() => {
+                    endSession()
+                    navigate('/')
+                }}
+            />
         </motion.div>
     )
 }

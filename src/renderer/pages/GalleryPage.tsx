@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useNavigate } from 'react-router-dom'
+import { useSessionStore } from '../stores'
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase'
+import { ConfirmBackHomeModal } from '../components/ConfirmBackHomeModal'
 import styles from './GalleryPage.module.css'
 
 interface GalleryData {
@@ -14,12 +16,15 @@ interface GalleryData {
 
 function GalleryPage(): JSX.Element {
     const [searchParams] = useSearchParams()
+    const navigate = useNavigate()
+    const { endSession } = useSessionStore()
     const sessionId = searchParams.get('session')
 
     const [gallery, setGallery] = useState<GalleryData | null>(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
     const [activeTab, setActiveTab] = useState<'strip' | 'gif' | 'live' | 'photos'>('strip')
+    const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false)
 
     useEffect(() => {
         if (!sessionId) {
@@ -95,6 +100,24 @@ function GalleryPage(): JSX.Element {
     if (loading) {
         return (
             <div className={styles.container}>
+                <button
+                    onClick={() => setIsConfirmModalOpen(true)}
+                    title="Back to Home"
+                    style={{
+                        position: 'fixed',
+                        top: '20px',
+                        left: '20px',
+                        padding: '10px 16px',
+                        backgroundColor: '#f8f9fa',
+                        border: '1px solid #dee2e6',
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        fontSize: '16px',
+                        zIndex: 100
+                    }}
+                >
+                    ← Kembali
+                </button>
                 <div className={styles.loading}>
                     <div className={styles.spinner}></div>
                     <p>Loading your photos...</p>
@@ -106,6 +129,24 @@ function GalleryPage(): JSX.Element {
     if (error || !gallery) {
         return (
             <div className={styles.container}>
+                <button
+                    onClick={() => setIsConfirmModalOpen(true)}
+                    title="Back to Home"
+                    style={{
+                        position: 'fixed',
+                        top: '20px',
+                        left: '20px',
+                        padding: '10px 16px',
+                        backgroundColor: '#fcfcfc',
+                        border: '1px solid #dee2e6',
+                        borderRadius: '8px',
+                        cursor: 'pointer',
+                        fontSize: '16px',
+                        zIndex: 100
+                    }}
+                >
+                    ← Kembali
+                </button>
                 <div className={styles.error}>
                     <span>📷</span>
                     <h2>{error || 'Gallery not found'}</h2>
@@ -117,6 +158,24 @@ function GalleryPage(): JSX.Element {
 
     return (
         <div className={styles.container}>
+            <button
+                onClick={() => setIsConfirmModalOpen(true)}
+                title="Back to Home"
+                style={{
+                    position: 'fixed',
+                    top: '20px',
+                    left: '20px',
+                    padding: '10px 16px',
+                    backgroundColor: '#f8f9fa',
+                    border: '1px solid #dee2e6',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontSize: '16px',
+                    zIndex: 100
+                }}
+            >
+                ← Kembali
+            </button>
             <header className={styles.header}>
                 <h1>📸 Your Photos</h1>
                 <p className={styles.date}>
@@ -229,6 +288,15 @@ function GalleryPage(): JSX.Element {
             <footer className={styles.footer}>
                 <p>Powered by Sebooth</p>
             </footer>
+
+            <ConfirmBackHomeModal
+                isOpen={isConfirmModalOpen}
+                onClose={() => setIsConfirmModalOpen(false)}
+                onConfirm={() => {
+                    endSession()
+                    navigate('/')
+                }}
+            />
         </div>
     )
 }
