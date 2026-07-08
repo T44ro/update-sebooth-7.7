@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { CameraHandler } from '../handlers/CameraHandler'
 import { GPhotoCamera } from '../handlers/GPhotoCamera'
 import { DigiCamHTTPCamera } from '../handlers/DigiCamHTTPCamera'
+import { CanonEDSDKCamera } from '../handlers/CanonEDSDKCamera'
 import { MockCamera } from '../handlers/MockCamera'
 import { CameraDevice, CaptureResult, CameraPropertyValues, APIResponse } from '@shared/types'
 
@@ -126,6 +127,17 @@ export function registerCameraHandlers(ipcMain: IpcMain): void {
         }
         cameraHandler = new DigiCamHTTPCamera()
         console.log('[Camera IPC] Switched to DigiCamControl HTTP Camera (Full Control mode)')
+        return { success: true }
+    })
+
+    // Switch to Canon EDSDK (Native Canon SDK — fastest, most reliable for Canon cameras)
+    ipcMain.handle('camera:use-canon-edsdk', async (): Promise<APIResponse<void>> => {
+        // Shutdown existing handler if it has a shutdown method
+        if (cameraHandler && 'shutdown' in cameraHandler) {
+            await (cameraHandler as any).shutdown()
+        }
+        cameraHandler = new CanonEDSDKCamera()
+        console.log('[Camera IPC] Switched to Canon EDSDK Camera (Native Canon SDK mode)')
         return { success: true }
     })
 

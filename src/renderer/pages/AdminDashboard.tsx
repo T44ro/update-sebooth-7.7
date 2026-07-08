@@ -1807,6 +1807,34 @@ function AdminDashboard(): JSX.Element {
                                 <label style={{
                                     display: 'flex', alignItems: 'center', gap: '15px', cursor: 'pointer',
                                     padding: '15px',
+                                    border: config.cameraMode === 'edsdk' ? '2px solid #f59e0b' : '2px solid rgba(255,255,255,0.1)',
+                                    borderRadius: '12px',
+                                    background: config.cameraMode === 'edsdk' ? 'rgba(245,158,11,0.1)' : 'transparent'
+                                }}>
+                                    <input
+                                        type="radio"
+                                        name="cameraMode"
+                                        value="edsdk"
+                                        checked={config.cameraMode === 'edsdk'}
+                                        onChange={async () => {
+                                            updateConfig({ cameraMode: 'edsdk' })
+                                            await window.api.camera.useCanonEdsdk()
+                                        }}
+                                        style={{ width: '20px', height: '20px' }}
+                                    />
+                                    <div>
+                                        <div style={{ fontWeight: 'bold', fontSize: '16px', color: 'white' }}>📷 Canon EDSDK (dslrBooth Engine)</div>
+                                        <div style={{ fontSize: '13px', color: '#9ca3af', marginTop: '4px' }}>
+                                            <strong style={{ color: '#f59e0b' }}>⚡ RECOMMENDED untuk Canon</strong> — Menggunakan Canon EDSDK native SDK (engine yang sama dengan dslrBooth).
+                                            Trigger tercepat (~200ms), event-driven capture, foto langsung ke RAM. 
+                                            Support: Canon EOS 1300D, 60D, 70D, 80D, 5D, 6D, R series.
+                                        </div>
+                                    </div>
+                                </label>
+
+                                <label style={{
+                                    display: 'flex', alignItems: 'center', gap: '15px', cursor: 'pointer',
+                                    padding: '15px',
                                     border: config.cameraMode === 'dslr' ? '2px solid #3b82f6' : '2px solid rgba(255,255,255,0.1)',
                                     borderRadius: '12px',
                                     background: config.cameraMode === 'dslr' ? 'rgba(59,130,246,0.1)' : 'transparent'
@@ -1830,6 +1858,88 @@ function AdminDashboard(): JSX.Element {
                                     </div>
                                 </label>
                             </div>
+
+                            {config.cameraMode === 'edsdk' && (
+                                <div style={{ marginTop: '15px', padding: '20px', background: 'rgba(245,158,11,0.05)', borderRadius: '12px', border: '1px solid rgba(245,158,11,0.3)' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+                                        <div>
+                                            <h4 style={{ margin: 0, color: '#fbbf24' }}>📷 Canon EDSDK Control Panel</h4>
+                                            <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#9ca3af' }}>
+                                                Engine yang sama dengan dslrBooth — trigger langsung via Canon SDK
+                                            </p>
+                                        </div>
+                                        <div style={{ display: 'flex', gap: '8px' }}>
+                                            <button
+                                                disabled={cameraConnecting}
+                                                onClick={async () => {
+                                                    setCameraConnecting(true)
+                                                    setCaptureTestResult(null)
+                                                    try {
+                                                        const connectResult = await window.api.camera.connect('canon_edsdk_0')
+                                                        if (connectResult.success) {
+                                                            setCameraConnected(true)
+                                                        } else {
+                                                            setCaptureTestResult(`❌ ${connectResult.error || 'Gagal koneksi'}`)
+                                                        }
+                                                    } catch (e: any) {
+                                                        setCaptureTestResult(`❌ ${e.message}`)
+                                                    }
+                                                    setCameraConnecting(false)
+                                                }}
+                                                style={{
+                                                    padding: '8px 16px', borderRadius: '8px', cursor: 'pointer',
+                                                    background: cameraConnected ? '#22c55e' : '#f59e0b',
+                                                    color: 'white', border: 'none', fontSize: '13px', fontWeight: 'bold'
+                                                }}
+                                            >
+                                                {cameraConnecting ? '⏳ Connecting...' : cameraConnected ? '✅ Connected' : '🔌 Connect Camera'}
+                                            </button>
+                                            <button
+                                                onClick={async () => {
+                                                    setCaptureTestResult('⏳ Triggering shutter...')
+                                                    try {
+                                                        const result = await window.api.camera.capture('test_edsdk')
+                                                        if (result.success && result.data?.success) {
+                                                            setCaptureTestResult(`✅ Capture berhasil! File: ${result.data.imagePath}`)
+                                                        } else {
+                                                            setCaptureTestResult(`❌ ${result.data?.error || result.error || 'Capture gagal'}`)
+                                                        }
+                                                    } catch (e: any) {
+                                                        setCaptureTestResult(`❌ ${e.message}`)
+                                                    }
+                                                }}
+                                                style={{
+                                                    padding: '8px 16px', borderRadius: '8px', cursor: 'pointer',
+                                                    background: '#dc2626', color: 'white', border: 'none', fontSize: '13px', fontWeight: 'bold'
+                                                }}
+                                            >
+                                                📸 Test Capture
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {captureTestResult && (
+                                        <div style={{
+                                            padding: '10px 15px', borderRadius: '8px', fontSize: '13px',
+                                            background: captureTestResult.includes('✅') ? 'rgba(34,197,94,0.1)' : captureTestResult.includes('⏳') ? 'rgba(245,158,11,0.1)' : 'rgba(239,68,68,0.1)',
+                                            color: captureTestResult.includes('✅') ? '#86efac' : captureTestResult.includes('⏳') ? '#fbbf24' : '#fca5a5',
+                                            border: `1px solid ${captureTestResult.includes('✅') ? 'rgba(34,197,94,0.3)' : captureTestResult.includes('⏳') ? 'rgba(245,158,11,0.3)' : 'rgba(239,68,68,0.3)'}`
+                                        }}>
+                                            {captureTestResult}
+                                        </div>
+                                    )}
+
+                                    <div style={{ marginTop: '12px', padding: '12px', background: 'rgba(245,158,11,0.08)', borderRadius: '8px', fontSize: '12px', color: '#d4d4d8' }}>
+                                        <strong style={{ color: '#fbbf24' }}>ℹ️ Tips:</strong>
+                                        <ul style={{ margin: '6px 0 0', paddingLeft: '18px', lineHeight: '1.6' }}>
+                                            <li>Pastikan kamera Canon dalam mode <strong>PTP</strong> (bukan MTP/Auto)</li>
+                                            <li>Tutup semua aplikasi kamera lainnya (EOS Utility, dslrBooth, digiCamControl)</li>
+                                            <li>Jika gagal, coba cabut dan pasang kembali kabel USB</li>
+                                            <li>Canon 1300D, 60D, 70D, 80D, 5D, 6D, R series didukung</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            )}
 
                             {config.cameraMode === 'ptp' && (
                                 <div style={{ marginTop: '15px', padding: '20px', background: 'rgba(239,68,68,0.05)', borderRadius: '12px', border: '1px solid rgba(239,68,68,0.3)' }}>

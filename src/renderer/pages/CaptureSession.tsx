@@ -192,7 +192,7 @@ function CaptureSession(): JSX.Element {
             if (digicamLiveViewTimer.current) {
                 clearInterval(digicamLiveViewTimer.current)
             }
-            if (config.cameraMode === 'ptp') {
+            if (config.cameraMode === 'ptp' || config.cameraMode === 'edsdk') {
                 window.api.camera.stopLiveView().catch(() => {})
             }
         }
@@ -200,7 +200,7 @@ function CaptureSession(): JSX.Element {
 
     // Auto-start digiCamControl live view when in PTP mode
     useEffect(() => {
-        if (config.cameraMode === 'ptp') {
+        if (config.cameraMode === 'ptp' || config.cameraMode === 'edsdk') {
             const startDigicamLiveView = async () => {
                 try {
                     await window.api.camera.startLiveView()
@@ -643,8 +643,8 @@ function CaptureSession(): JSX.Element {
                     style={{ aspectRatio: slotAspectRatio }}
                     ref={viewfinderRef}
                 >
-                    {/* Camera Feed — Webcam or digiCamControl Live View */}
-                    {config.cameraMode === 'ptp' && digicamLiveViewUrl ? (
+                    {/* Camera Feed — Webcam or digiCamControl/Canon EDSDK Live View */}
+                    {(config.cameraMode === 'ptp' || config.cameraMode === 'edsdk') && digicamLiveViewUrl ? (
                         <img
                             key={digicamLiveViewKey}
                             src={`${digicamLiveViewUrl}?t=${digicamLiveViewKey}`}

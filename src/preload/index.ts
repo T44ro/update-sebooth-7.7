@@ -38,6 +38,9 @@ const api = {
         useDirectPtp: (): Promise<APIResponse<void>> =>
             ipcRenderer.invoke('camera:use-direct-ptp'),
 
+        useCanonEdsdk: (): Promise<APIResponse<void>> =>
+            ipcRenderer.invoke('camera:use-canon-edsdk'),
+
         // Camera Property Control (ISO, Aperture, Shutter Speed)
         setProperty: (property: string, value: string): Promise<APIResponse<boolean>> =>
             ipcRenderer.invoke('camera:set-property', property, value),

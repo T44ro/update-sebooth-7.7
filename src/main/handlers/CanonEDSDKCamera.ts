@@ -1,0 +1,731 @@
+import { exec } from 'child_process'
+import { promisify } from 'util'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from 'fs'
+import { dirname, join } from 'path'
+import { app } from 'electron'
+import { CameraHandler } from './CameraHandler'
+import { CameraDevice, CaptureResult } from '@shared/types'
+
+const execAsync = promisify(exec)
+
+/**
+ * Canon EDSDK Camera Handler
+ * 
+ * Uses Canon's proprietary EDSDK (via Canon.Eos.Framework.dll) for direct
+ * camera communication. This is the same engine used by dslrBooth and provides
+ * the most reliable trigger mechanism for Canon cameras.
+ * 
+ * Architecture:
+ *   Node.js → PowerShell → .NET Assembly (Canon.Eos.Framework.dll) → EDSDK.dll → Camera
+ * 
+ * Supported cameras: All Canon EOS DSLR/Mirrorless including:
+ *   - Canon EOS 1300D (Rebel T6) ← PRIMARY TARGET
+ *   - Canon EOS 60D, 70D, 80D, 90D
+ *   - Canon EOS 5D series, 6D series
+ *   - Canon EOS R series (mirrorless)
+ * 
+ * Requirements:
+ *   - EDSDK.dll, EdsImage.dll, Canon.Eos.Framework.dll in lib/canon/
+ *   - Camera connected via USB in PTP mode
+ *   - No other camera software holding USB lock (EOSUtility, EOS Webcam Utility)
+ */
+export class CanonEDSDKCamera extends CameraHandler {
+    private canonLibPath: string
+    private liveViewActive: boolean = false
+    private liveViewTempPath: string
+    private detectedCameraName: string = ''
+
+    constructor() {
+        super()
+        // Determine the path to Canon DLLs
+        // In development: src/main/lib/canon/
+        // In production: resources/lib/canon/ (bundled)
+        const isDev = !app.isPackaged
+        if (isDev) {
+            this.canonLibPath = join(__dirname, '..', 'lib', 'canon')
+        } else {
+            this.canonLibPath = join(process.resourcesPath, 'lib', 'canon')
+        }
+
+        // Fallback: check if files exist at the dev source path
+        if (!existsSync(join(this.canonLibPath, 'Canon.Eos.Framework.dll'))) {
+            // Try absolute path during development
+            const devPath = join(app.getAppPath(), 'src', 'main', 'lib', 'canon')
+            if (existsSync(join(devPath, 'Canon.Eos.Framework.dll'))) {
+                this.canonLibPath = devPath
+            }
+        }
+
+        // Live View temp file path
+        this.liveViewTempPath = join(app.getPath('userData'), 'temp', 'edsdk_liveview.jpg')
+        const lvDir = dirname(this.liveViewTempPath)
+        if (!existsSync(lvDir)) {
+            mkdirSync(lvDir, { recursive: true })
+        }
+
+        console.log(`[CanonEDSDK] Lib path: ${this.canonLibPath}`)
+    }
+
+    /**
+     * Run a PowerShell script reliably using Base64 encoding.
+     * Avoids all string escaping issues with exec().
+     */
+    private async runPowerShell(script: string, timeout = 30000): Promise<string> {
+        const base64Script = Buffer.from(script, 'utf16le').toString('base64')
+        try {
+            const { stdout, stderr } = await execAsync(
+                `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${base64Script}`,
+                { timeout, maxBuffer: 50 * 1024 * 1024 } // 50MB buffer for image data
+            )
+            if (stderr) {
+                console.warn('[CanonEDSDK] PowerShell stderr:', stderr.trim())
+            }
+            return stdout.trim()
+        } catch (error: any) {
+            console.error('[CanonEDSDK] PowerShell Execution Error:', error.message)
+            if (error.stdout) console.error('[CanonEDSDK] stdout:', error.stdout)
+            if (error.stderr) console.error('[CanonEDSDK] stderr:', error.stderr)
+            throw error
+        }
+    }
+
+    /**
+     * Kill conflicting camera applications that hold USB lock
+     */
+    private async killConflictingApps(): Promise<void> {
+        const appsToKill = [
+            'EOSUtility.exe',
+            'EOS Utility.exe',
+            // Do NOT kill EOS Webcam Utility — it may be needed for webcam preview
+        ]
+
+        for (const appName of appsToKill) {
+            try {
+                await execAsync(`taskkill /f /im "${appName}"`, { timeout: 3000 })
+                console.log(`[CanonEDSDK] Killed ${appName}`)
+                await new Promise(resolve => setTimeout(resolve, 500))
+            } catch {
+                // App not running — ignore
+            }
+        }
+    }
+
+    /**
+     * Get the common PowerShell preamble that loads EDSDK assemblies
+     */
+    private getEdsdkPreamble(): string {
+        const frameworkDll = join(this.canonLibPath, 'Canon.Eos.Framework.dll').replace(/\\/g, '\\\\')
+        const edsdkDll = join(this.canonLibPath, 'EDSDK.dll').replace(/\\/g, '\\\\')
+        const edsImageDll = join(this.canonLibPath, 'EdsImage.dll').replace(/\\/g, '\\\\')
+
+        return `
+$ErrorActionPreference = 'Stop'
+
+# Ensure EDSDK.dll and EdsImage.dll are in the same directory
+# Canon.Eos.Framework.dll will P/Invoke EDSDK.dll from its own directory
+$canonDir = '${this.canonLibPath.replace(/\\/g, '\\\\')}'
+
+# Set DLL search path to include Canon lib directory
+[System.Environment]::SetEnvironmentVariable('PATH', "$canonDir;$env:PATH")
+
+# Load the .NET wrapper assembly
+try {
+    [System.Reflection.Assembly]::LoadFrom('${frameworkDll}') | Out-Null
+    [Console]::WriteLine("===EDSDK_LOADED===")
+} catch {
+    [Console]::WriteLine("===EDSDK_LOAD_ERROR===$($_.Exception.Message)")
+    exit
+}
+`
+    }
+
+    /**
+     * List available Canon cameras via EDSDK
+     */
+    async listCameras(): Promise<CameraDevice[]> {
+        console.log('[CanonEDSDK] Scanning for Canon cameras...')
+
+        // Verify DLLs exist
+        const frameworkDll = join(this.canonLibPath, 'Canon.Eos.Framework.dll')
+        if (!existsSync(frameworkDll)) {
+            console.error(`[CanonEDSDK] Canon.Eos.Framework.dll not found at: ${frameworkDll}`)
+            return [{
+                id: 'canon_edsdk_0',
+                name: 'Canon DSLR (EDSDK DLL tidak ditemukan)',
+                port: 'USB',
+                connected: false
+            }]
+        }
+
+        try {
+            const result = await this.runPowerShell(`
+${this.getEdsdkPreamble()}
+
+try {
+    $framework = New-Object Canon.Eos.Framework.EosFramework
+    $cameras = $framework.GetCameraCollection()
+    $count = $cameras.Count
+
+    if ($count -eq 0) {
+        [Console]::WriteLine("===CANON_NO_CAMERA===")
+    } else {
+        for ($i = 0; $i -lt $count; $i++) {
+            $cam = $cameras.Item($i)
+            $name = $cam.DeviceDescription
+            $port = $cam.PortName
+            [Console]::WriteLine("===CANON_CAMERA===$i|$name|$port")
+        }
+    }
+    
+    # Cleanup
+    $framework.Dispose()
+} catch {
+    [Console]::WriteLine("===CANON_ERROR===$($_.Exception.Message)")
+}
+`, 15000)
+
+            console.log('[CanonEDSDK] Scan result:', result)
+
+            if (result.includes('===EDSDK_LOAD_ERROR===')) {
+                const errMatch = result.match(/===EDSDK_LOAD_ERROR===(.*)/m)
+                return [{
+                    id: 'canon_edsdk_0',
+                    name: `Canon DSLR (EDSDK error: ${errMatch?.[1] || 'unknown'})`,
+                    port: 'USB',
+                    connected: false
+                }]
+            }
+
+            if (result.includes('===CANON_NO_CAMERA===')) {
+                return [{
+                    id: 'canon_edsdk_0',
+                    name: 'Canon DSLR (Tidak ada kamera terdeteksi — pastikan USB terhubung & kamera ON)',
+                    port: 'USB',
+                    connected: false
+                }]
+            }
+
+            const cameraLines = result.match(/===CANON_CAMERA===(.+)/gm)
+            if (cameraLines && cameraLines.length > 0) {
+                return cameraLines.map(line => {
+                    const data = line.replace('===CANON_CAMERA===', '')
+                    const [index, name, port] = data.split('|')
+                    return {
+                        id: `canon_edsdk_${index}`,
+                        name: `${name || 'Canon Camera'} (Canon EDSDK)`,
+                        port: port || 'USB',
+                        connected: false
+                    }
+                })
+            }
+
+            if (result.includes('===CANON_ERROR===')) {
+                const errMatch = result.match(/===CANON_ERROR===(.*)/m)
+                return [{
+                    id: 'canon_edsdk_0',
+                    name: `Canon DSLR (Error: ${errMatch?.[1] || 'unknown'})`,
+                    port: 'USB',
+                    connected: false
+                }]
+            }
+        } catch (error: any) {
+            console.error('[CanonEDSDK] listCameras error:', error.message)
+        }
+
+        return [{
+            id: 'canon_edsdk_0',
+            name: 'Canon DSLR (Canon EDSDK — scanning...)',
+            port: 'USB',
+            connected: false
+        }]
+    }
+
+    async connect(cameraId: string): Promise<boolean> {
+        console.log(`[CanonEDSDK] Connecting to camera: ${cameraId}`)
+
+        // Kill conflicting apps first
+        await this.killConflictingApps()
+
+        // Wait a moment for USB to be released
+        await new Promise(resolve => setTimeout(resolve, 1000))
+
+        try {
+            const result = await this.runPowerShell(`
+${this.getEdsdkPreamble()}
+
+try {
+    $framework = New-Object Canon.Eos.Framework.EosFramework
+    $cameras = $framework.GetCameraCollection()
+
+    if ($cameras.Count -eq 0) {
+        [Console]::WriteLine("===CANON_CONNECT_ERROR===Tidak ada kamera Canon terdeteksi. Pastikan: (1) Kabel USB terhubung, (2) Kamera ON, (3) Mode PTP aktif, (4) Tutup EOS Utility")
+        $framework.Dispose()
+        exit
+    }
+
+    $cam = $cameras.Item(0)
+    $name = $cam.DeviceDescription
+    
+    # Open session
+    # SavePicturesToHost sets the camera to save photos directly to PC RAM
+    $cam.SavePicturesToHost()
+    
+    [Console]::WriteLine("===CANON_CONNECTED===$name")
+    
+    # Keep framework reference alive? No — PS script ends. Each operation loads fresh.
+    $framework.Dispose()
+} catch {
+    [Console]::WriteLine("===CANON_CONNECT_ERROR===$($_.Exception.Message)")
+}
+`, 20000)
+
+            console.log('[CanonEDSDK] Connect result:', result)
+
+            if (result.includes('===CANON_CONNECTED===')) {
+                const nameMatch = result.match(/===CANON_CONNECTED===(.*)/m)
+                this.detectedCameraName = nameMatch?.[1]?.trim() || 'Canon Camera'
+                this.connected = true
+                this.currentCamera = {
+                    id: cameraId,
+                    name: `${this.detectedCameraName} (Canon EDSDK)`,
+                    port: 'USB',
+                    connected: true
+                }
+                console.log(`[CanonEDSDK] ✅ Connected: ${this.detectedCameraName}`)
+                return true
+            }
+
+            const errMatch = result.match(/===CANON_CONNECT_ERROR===(.*)/m)
+            const errorMsg = errMatch?.[1] || 'Unknown connection error'
+            this.connected = false
+            this.currentCamera = null
+            throw new Error(errorMsg)
+        } catch (error: any) {
+            this.connected = false
+            this.currentCamera = null
+            console.error('[CanonEDSDK] Connect error:', error.message)
+            throw error
+        }
+    }
+
+    async disconnect(): Promise<void> {
+        if (this.liveViewActive) {
+            await this.stopLiveView()
+        }
+        this.connected = false
+        this.currentCamera = null
+        this.detectedCameraName = ''
+        console.log('[CanonEDSDK] Disconnected')
+    }
+
+    /**
+     * Capture a photo using Canon EDSDK
+     * 
+     * Flow:
+     * 1. Initialize EDSDK framework
+     * 2. Get camera → SavePicturesToHost (RAM mode)
+     * 3. Register PictureTaken event handler
+     * 4. TakePictureNoAf() — trigger shutter without autofocus (faster)
+     * 5. Wait for PictureTaken event → receive image bytes
+     * 6. Save to outputPath
+     */
+    async capture(outputPath: string): Promise<CaptureResult> {
+        try {
+            console.log(`[CanonEDSDK] Capturing to: ${outputPath}`)
+
+            const dir = dirname(outputPath)
+            if (!existsSync(dir)) {
+                mkdirSync(dir, { recursive: true })
+            }
+
+            // Kill any USB-locking apps before capture
+            await this.killConflictingApps()
+
+            const escapedOutputPath = outputPath.replace(/\\/g, '\\\\').replace(/'/g, "''")
+
+            const result = await this.runPowerShell(`
+${this.getEdsdkPreamble()}
+
+$outputPath = '${escapedOutputPath}'
+
+try {
+    $framework = New-Object Canon.Eos.Framework.EosFramework
+    $cameras = $framework.GetCameraCollection()
+
+    if ($cameras.Count -eq 0) {
+        [Console]::WriteLine("===CAPTURE_ERROR===Tidak ada kamera Canon terdeteksi")
+        $framework.Dispose()
+        exit
+    }
+
+    $cam = $cameras.Item(0)
+    $camName = $cam.DeviceDescription
+    [Console]::WriteLine("===CAPTURE_CAMERA===$camName")
+
+    # Set save destination to Host (PC RAM, not SD card)
+    $cam.SavePicturesToHost()
+
+    # Create event synchronization objects
+    $captureCompleted = New-Object System.Threading.ManualResetEvent($false)
+    $capturedImageBytes = $null
+    $captureError = ""
+
+    # Register PictureTaken event handler — this fires when the image arrives
+    $pictureHandler = [System.EventHandler[Canon.Eos.Framework.Eventing.EosMemoryImageEventArgs]] {
+        param($sender, $e)
+        try {
+            # $e contains the image data
+            $script:capturedImageBytes = $e.ImageData
+            [Console]::WriteLine("===CAPTURE_EVENT_FIRED===ImageSize: $($e.ImageData.Length)")
+        } catch {
+            $script:captureError = $_.Exception.Message
+            [Console]::WriteLine("===CAPTURE_EVENT_ERROR===$($_.Exception.Message)")
+        }
+        $captureCompleted.Set()
+    }
+
+    # Also handle file-based events (some cameras use this instead)
+    $fileHandler = [System.EventHandler[Canon.Eos.Framework.Eventing.EosFileImageEventArgs]] {
+        param($sender, $e)
+        try {
+            $script:capturedImageBytes = [System.IO.File]::ReadAllBytes($e.ImageFilePath)
+            [Console]::WriteLine("===CAPTURE_FILE_EVENT===File: $($e.ImageFilePath), Size: $($script:capturedImageBytes.Length)")
+        } catch {
+            $script:captureError = $_.Exception.Message
+        }
+        $captureCompleted.Set()
+    }
+
+    $cam.add_PictureTaken($pictureHandler)
+    
+    [Console]::WriteLine("===CAPTURE_TRIGGERING===")
+
+    # Try TakePictureNoAf first (faster, no autofocus delay)
+    try {
+        $cam.TakePictureNoAf()
+        [Console]::WriteLine("===CAPTURE_SHUTTER_OK===TakePictureNoAf")
+    } catch {
+        # Fallback to TakePicture (with autofocus)
+        [Console]::WriteLine("===CAPTURE_NOAF_FAILED===$($_.Exception.Message)")
+        try {
+            $cam.TakePicture()
+            [Console]::WriteLine("===CAPTURE_SHUTTER_OK===TakePicture")
+        } catch {
+            [Console]::WriteLine("===CAPTURE_ERROR===Shutter gagal: $($_.Exception.Message)")
+            $cam.remove_PictureTaken($pictureHandler)
+            $framework.Dispose()
+            exit
+        }
+    }
+
+    # Wait for the image to arrive (max 15 seconds)
+    $gotImage = $captureCompleted.WaitOne(15000)
+
+    $cam.remove_PictureTaken($pictureHandler)
+
+    if ($gotImage -and $capturedImageBytes -ne $null -and $capturedImageBytes.Length -gt 1000) {
+        # Save image to disk
+        [System.IO.File]::WriteAllBytes($outputPath, $capturedImageBytes)
+        [Console]::WriteLine("===CAPTURE_SAVED===Size: $($capturedImageBytes.Length)")
+    } elseif ($captureError) {
+        [Console]::WriteLine("===CAPTURE_ERROR===$captureError")
+    } else {
+        [Console]::WriteLine("===CAPTURE_TIMEOUT===Image did not arrive within 15 seconds")
+    }
+
+    $framework.Dispose()
+} catch {
+    [Console]::WriteLine("===CAPTURE_ERROR===$($_.Exception.Message)")
+}
+`, 30000)
+
+            console.log('[CanonEDSDK] Capture result:', result)
+
+            if (result.includes('===CAPTURE_SAVED===')) {
+                if (existsSync(outputPath)) {
+                    const sizeMatch = result.match(/===CAPTURE_SAVED===Size: (\d+)/)
+                    const fileSize = sizeMatch ? sizeMatch[1] : 'unknown'
+                    console.log(`[CanonEDSDK] ✅ Photo saved: ${outputPath} (${fileSize} bytes)`)
+                    return {
+                        success: true,
+                        imagePath: outputPath,
+                        timestamp: Date.now()
+                    }
+                }
+            }
+
+            // Extract error message
+            const errMatch = result.match(/===CAPTURE_ERROR===(.*)/m)
+            const timeoutMatch = result.match(/===CAPTURE_TIMEOUT===(.*)/m)
+            const errorMsg = errMatch?.[1] || timeoutMatch?.[1] || 'Capture failed — unknown error'
+
+            console.error(`[CanonEDSDK] Capture failed: ${errorMsg}`)
+            return {
+                success: false,
+                error: `Canon EDSDK: ${errorMsg}`,
+                timestamp: Date.now()
+            }
+        } catch (error: any) {
+            console.error('[CanonEDSDK] Capture exception:', error.message)
+            return {
+                success: false,
+                error: `Canon EDSDK Error: ${error.message}`,
+                timestamp: Date.now()
+            }
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // Camera Settings API
+    // ══════════════════════════════════════════════════════════
+
+    /**
+     * Set a camera property (iso, shutterspeed, aperture, etc.)
+     * EDSDK uses its own property enums — we map common names
+     */
+    async setProperty(property: string, value: string): Promise<boolean> {
+        try {
+            const result = await this.runPowerShell(`
+${this.getEdsdkPreamble()}
+
+try {
+    $framework = New-Object Canon.Eos.Framework.EosFramework
+    $cameras = $framework.GetCameraCollection()
+    if ($cameras.Count -eq 0) {
+        [Console]::WriteLine("===SET_ERROR===No camera")
+        $framework.Dispose()
+        exit
+    }
+    $cam = $cameras.Item(0)
+    
+    $property = '${property}'
+    $value = '${value}'
+
+    switch ($property) {
+        'iso' { $cam.SetProperty(0x00000102, [int]$value) }
+        'shutterspeed' { $cam.SetProperty(0x00000106, [int]$value) }
+        'aperture' { $cam.SetProperty(0x00000103, [int]$value) }
+        default { [Console]::WriteLine("===SET_ERROR===Unknown property: $property") }
+    }
+    
+    [Console]::WriteLine("===SET_OK===")
+    $framework.Dispose()
+} catch {
+    [Console]::WriteLine("===SET_ERROR===$($_.Exception.Message)")
+}
+`, 10000)
+
+            return result.includes('===SET_OK===')
+        } catch (error: any) {
+            console.error(`[CanonEDSDK] Failed to set ${property}:`, error.message)
+            return false
+        }
+    }
+
+    /**
+     * Get a camera property value
+     */
+    async getProperty(property: string): Promise<string | null> {
+        try {
+            const result = await this.runPowerShell(`
+${this.getEdsdkPreamble()}
+
+try {
+    $framework = New-Object Canon.Eos.Framework.EosFramework
+    $cameras = $framework.GetCameraCollection()
+    if ($cameras.Count -eq 0) {
+        [Console]::WriteLine("===GET_ERROR===No camera")
+        $framework.Dispose()
+        exit
+    }
+    $cam = $cameras.Item(0)
+    
+    $property = '${property}'
+    $val = ""
+
+    switch ($property) {
+        'camera.name' { $val = $cam.DeviceDescription }
+        'battery' { $val = $cam.BatteryLevel.ToString() }
+        default { $val = "unsupported" }
+    }
+    
+    [Console]::WriteLine("===GET_VALUE===$val")
+    $framework.Dispose()
+} catch {
+    [Console]::WriteLine("===GET_ERROR===$($_.Exception.Message)")
+}
+`, 10000)
+
+            const match = result.match(/===GET_VALUE===(.*)/m)
+            return match?.[1]?.trim() || null
+        } catch (error: any) {
+            console.error(`[CanonEDSDK] Failed to get ${property}:`, error.message)
+            return null
+        }
+    }
+
+    /**
+     * Get available values for a camera property
+     */
+    async getAvailableValues(property: string): Promise<{ current: string; available: string[] }> {
+        const current = await this.getProperty(property) || ''
+        return { current, available: [] }
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // Live View
+    // ══════════════════════════════════════════════════════════
+
+    /**
+     * Start EDSDK Live View
+     */
+    async startLiveView(): Promise<boolean> {
+        try {
+            const result = await this.runPowerShell(`
+${this.getEdsdkPreamble()}
+
+try {
+    $framework = New-Object Canon.Eos.Framework.EosFramework
+    $cameras = $framework.GetCameraCollection()
+    if ($cameras.Count -eq 0) {
+        [Console]::WriteLine("===LV_ERROR===No camera")
+        $framework.Dispose()
+        exit
+    }
+    $cam = $cameras.Item(0)
+    $cam.StartLiveView()
+    [Console]::WriteLine("===LV_STARTED===")
+    $framework.Dispose()
+} catch {
+    [Console]::WriteLine("===LV_ERROR===$($_.Exception.Message)")
+}
+`, 10000)
+
+            if (result.includes('===LV_STARTED===')) {
+                this.liveViewActive = true
+                console.log('[CanonEDSDK] Live view started')
+                return true
+            }
+
+            console.warn('[CanonEDSDK] Failed to start live view:', result)
+            return false
+        } catch (error: any) {
+            console.error('[CanonEDSDK] Live view start error:', error.message)
+            return false
+        }
+    }
+
+    /**
+     * Stop EDSDK Live View
+     */
+    async stopLiveView(): Promise<boolean> {
+        try {
+            const result = await this.runPowerShell(`
+${this.getEdsdkPreamble()}
+
+try {
+    $framework = New-Object Canon.Eos.Framework.EosFramework
+    $cameras = $framework.GetCameraCollection()
+    if ($cameras.Count -eq 0) {
+        [Console]::WriteLine("===LV_ERROR===No camera")
+        $framework.Dispose()
+        exit
+    }
+    $cam = $cameras.Item(0)
+    $cam.StopLiveView()
+    [Console]::WriteLine("===LV_STOPPED===")
+    $framework.Dispose()
+} catch {
+    [Console]::WriteLine("===LV_ERROR===$($_.Exception.Message)")
+}
+`, 10000)
+
+            this.liveViewActive = false
+            console.log('[CanonEDSDK] Live view stopped')
+            return true
+        } catch (error: any) {
+            console.error('[CanonEDSDK] Live view stop error:', error.message)
+            this.liveViewActive = false
+            return false
+        }
+    }
+
+    /**
+     * Get a single Live View frame from EDSDK and save to temp file.
+     * Returns the path to the temp file.
+     */
+    async getLiveViewFrame(): Promise<string | null> {
+        try {
+            const escapedPath = this.liveViewTempPath.replace(/\\/g, '\\\\').replace(/'/g, "''")
+
+            const result = await this.runPowerShell(`
+${this.getEdsdkPreamble()}
+
+try {
+    $framework = New-Object Canon.Eos.Framework.EosFramework
+    $cameras = $framework.GetCameraCollection()
+    if ($cameras.Count -eq 0) {
+        $framework.Dispose()
+        exit
+    }
+    $cam = $cameras.Item(0)
+    $imageBytes = $cam.GetLiveViewImage()
+    if ($imageBytes -ne $null -and $imageBytes.Length -gt 100) {
+        [System.IO.File]::WriteAllBytes('${escapedPath}', $imageBytes)
+        [Console]::WriteLine("===LV_FRAME_OK===$($imageBytes.Length)")
+    }
+    $framework.Dispose()
+} catch {
+    # Silent fail for live view frames — they're ephemeral
+}
+`, 5000)
+
+            if (result.includes('===LV_FRAME_OK===')) {
+                return this.liveViewTempPath
+            }
+            return null
+        } catch {
+            return null
+        }
+    }
+
+    /**
+     * Get the URL for the live view JPEG frame.
+     * For EDSDK, we use a temp file that gets updated by polling.
+     */
+    getLiveViewUrl(): string {
+        return `file:///${this.liveViewTempPath.replace(/\\/g, '/')}`
+    }
+
+    /**
+     * Check if live view is currently active
+     */
+    isLiveViewActive(): boolean {
+        return this.liveViewActive
+    }
+
+    // ══════════════════════════════════════════════════════════
+    // Lifecycle
+    // ══════════════════════════════════════════════════════════
+
+    /**
+     * Shutdown the Canon EDSDK handler
+     */
+    async shutdown(): Promise<void> {
+        if (this.liveViewActive) {
+            try { await this.stopLiveView() } catch { /* ignore */ }
+        }
+
+        // Clean up temp live view file
+        try {
+            if (existsSync(this.liveViewTempPath)) {
+                unlinkSync(this.liveViewTempPath)
+            }
+        } catch { /* ignore */ }
+
+        this.connected = false
+        this.currentCamera = null
+        this.detectedCameraName = ''
+        console.log('[CanonEDSDK] Handler shutdown')
+    }
+}

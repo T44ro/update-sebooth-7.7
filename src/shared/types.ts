@@ -141,7 +141,7 @@ export interface AppConfig {
     paymentTimeout: number // seconds - timeout for payment page
 
     // Camera
-    cameraMode: 'mock' | 'dslr' | 'ptp' // Mock (webcam), DSLR (CLI), or PTP (Direct)
+    cameraMode: 'mock' | 'dslr' | 'ptp' | 'edsdk' // Mock (webcam), DSLR (CLI), PTP (digiCamControl), or EDSDK (Canon native)
     selectedCameraId?: string // Device ID for USB capture card / specific webcam
 
     // Sharing
